@@ -1,7 +1,13 @@
-import tcod
-import time
+try:
+	import tcod
+except:
+	import libtcodpy as tcod
 
-font = 'terminal8x8_gs_ro.png'
+import time
+from pygame import mixer
+
+font = 'terminal16x16_gs_ro.png'
+audio = 'dungeon.mp3'
 
 # actual size of the window
 SCREEN_WIDTH	= 80
@@ -18,9 +24,9 @@ MAX_ROOMS		= 20
 
 FOV_ALGO		=  0
 FOV_LIGHT_WALLS	= True
-TORCH_RADIUS	= 30
+TORCH_RADIUS	= 60
 
-LIMIT_FPS		= 60  # 20 frames-per-second maximum
+LIMIT_FPS		= 30  # 20 frames-per-second maximum
 TICK_RATE		= 10
 BLINK_RATE		= 30
 
@@ -87,9 +93,14 @@ class Object:
 
 	def move(self, dx, dy):
 		# move by the given amount, if the destination is not blocked
-		if not isBlocked(x=(self.x + dx), y=(self.y + dy)):
+		if not isBlocked(x=(self.x + dx), y=(self.y + dy)) and (0 <= self.x + dx < MAP_WIDTH) and (0 <= self.y + dy < MAP_HEIGHT):
 			self.x += dx
 			self.y += dy
+		else:
+			dig(x=(self.x + dx), y=(self.y + dy))
+			global map_explorable
+			map_explorable = getExplorableTiles()
+			makeFovMap()
 
 	def draw(self, visibility=False, color=None):
 			# set the color and then draw the character that represents this
@@ -142,8 +153,7 @@ def getExplorableTiles():
 	explorable = 0
 	for x in range(MAP_WIDTH):
 		for y in range(MAP_HEIGHT):
-			wall = map[x][y].blocked
-			if not wall:
+			if not map[x][y].blocked:
 				explorable += 1
 	return explorable
 
@@ -226,6 +236,8 @@ def makeMap():
 				object.clear()
 	tcod.console_wait_for_keypress(True)
 
+	mixer.music.play()
+
 	map_explorable = getExplorableTiles()
 
 def makeFovMap():
@@ -302,15 +314,16 @@ def renderAll(visibility=False):
 
 def handleKeys():
 	global fov_recompute, objects, visibility_override, player, move
-	key = tcod.console_check_for_keypress()  #real-time
+	key = tcod.console_check_for_keypress(tcod.KEY_RELEASED)  #real-time
 	# key = tcod.console_wait_for_keypress(True)  # turn-based
 
 	if key.vk == tcod.KEY_ENTER and key.lalt:
 		# Alt+Enter: toggle fullscreen
 		tcod.console_set_fullscreen(not tcod.console_is_fullscreen()) 
 	elif key.vk == tcod.KEY_ESCAPE:
-		return True  # exit game
+		return 'exit'  # exit game
 	elif key.vk == tcod.KEY_DELETE:
+		mixer.music.stop()
 		objects = []
 		objects.append(player)
 		makeMap()
@@ -324,34 +337,36 @@ def handleKeys():
 	mov_mult = 2
 	if tcod.console_is_key_pressed(tcod.KEY_SHIFT):
 		mov_mult = 1
-	# if tcod.console_is_key_pressed(tcod.KEY_SHIFT):
-	# 	if tcod.console_is_key_pressed(tcod.KEY_UP):
-	# 		createProjectile(source=player, dx=0, dy=-1)
-
-	# movement keys
-	keypress = True
-	if tcod.console_is_key_pressed(tcod.KEY_UP):
-		(dx, dy) = (0, -1)
-	elif tcod.console_is_key_pressed(tcod.KEY_DOWN):
-		(dx, dy) = (0, 1)
-	elif tcod.console_is_key_pressed(tcod.KEY_LEFT):
-		(dx, dy) = (-1, 0)
-	elif tcod.console_is_key_pressed(tcod.KEY_RIGHT):
-		(dx, dy) = (1, 0)
-	else:
-		keypress = False
 
 	if tick_counter % (player.speed * mov_mult) == 0:
 		move = True
-		player.color = tcod.white
 		player.char = 'O'
 
-	if move and keypress:
-		player.move(dx, dy)
-		fov_recompute = True
-		move = False
-		player.color = tcod.lighter_grey
-		player.char = 'o'
+	if game_state == 'playing':
+		# movement keys
+		(dx, dy) = (0, 0)
+		keypress = False
+		if tcod.console_is_key_pressed(tcod.KEY_UP):
+			(dx, dy) = (dx + 0, dy - 1)
+			keypress = True
+		if tcod.console_is_key_pressed(tcod.KEY_DOWN):
+			(dx, dy) = (dx + 0, dy + 1)
+			keypress = True
+		if tcod.console_is_key_pressed(tcod.KEY_LEFT):
+			(dx, dy) = (dx - 1, dy + 0)
+			keypress = True
+		if tcod.console_is_key_pressed(tcod.KEY_RIGHT):
+			(dx, dy) = (dx + 1, dy + 0)
+			keypress = True
+
+		if move and keypress and (tick_counter % (player.speed * mov_mult) == 0):
+			move = False
+			player.char = 'o'
+			player.move(dx, dy)
+			fov_recompute = True
+			return 'action'
+
+		return 'no action'
 
 
 MAX_ROOM_MONSTERS = 3
@@ -369,24 +384,23 @@ def placeObjects(room):
 			#	10%: troll
 			#	 5%: wraith
 			choice = tcod.random_get_int(0, 0, 100)
-			if choice > (5 + 10 + 20):
+			if choice >= (5 + 10 + 20):
 				monster = Object(name='spider', blocks=False,
 						x=x, y=y, char='S',
 						color=tcod.red, priority=4)
-			elif choice > (5 + 10):
+			elif choice >= (5 + 10):
 				monster = Object(
 						name='goblin', blocks=True,
 						x=x, y=y, char='G',
 						color=tcod.green, priority=3)
-			elif choice > 5:
+			elif choice >= 5:
 				monster = Object(name='troll', blocks=True,
 						x=x, y=y, char='T',
 						color=tcod.darker_green, priority=2)
-			else:
+			elif choice >= 0:
 				monster = Object(name='wraith', blocks=False,
 						x=x, y=y, char='W',
 						color=tcod.lighter_blue, priority=1)
-
 			objects.append(monster)
 
 def isBlocked(x, y):
@@ -396,6 +410,12 @@ def isBlocked(x, y):
 		if object.blocks and object.x == x and object.y == y:
 			return True
 	return False
+
+def dig(x, y):
+	global map
+	if (0 < x < MAP_WIDTH-1) and (0 < y < MAP_HEIGHT-1):
+		map[x][y].blocked = False
+		map[x][y].block_sight = False
 
 def updateTick():
 	global tick_counter
@@ -418,6 +438,9 @@ tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'Adividiardi: The Wanderers'
 tcod.sys_set_fps(LIMIT_FPS)
 con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
 
+mixer.init()
+mixer.music.load('data/audio/{}'.format(audio))
+
 # create object representing the player
 player = Object(
 		name='player', blocks=True,
@@ -425,7 +448,7 @@ player = Object(
 		y=(SCREEN_HEIGHT // 2),
 		char='O', color=tcod.white,
 		priority=0, blinking=False,
-		speed=4)
+		speed=2)
 
 # create an NPC
 # npc = Object(SCREEN_WIDTH // 2 - 5, SCREEN_HEIGHT // 2, '@', tcod.yellow)
@@ -435,6 +458,8 @@ objects = []
 objects.append(player)
 
 # generate map (at this point it's not drawn to the screen)
+game_state = 'playing'
+player_action = None
 map_explorable = 0
 map_explored = 0
 fov_map = None
@@ -444,14 +469,13 @@ spawn_monsters = True
 toggle_blinking = False
 show_room_no = False
 tick_counter = 0
-move = True
+move = False
 
 makeMap()
 makeFovMap()
 
 
 while not tcod.console_is_window_closed():
-
 	# render the screen
 	renderAll(visibility=visibility_override)
 
@@ -468,6 +492,12 @@ while not tcod.console_is_window_closed():
 		print("you've explored the entire map!")
 
 	# handle keys and exit game if needed
-	exit = handleKeys()
-	if exit:
+	player_action = handleKeys()
+	if player_action == 'exit':
 		break
+
+	# let monsters make their turn
+	# if (game_statue == 'playing') and (player_action != 'no action'):
+	# 	for object in objects:
+	# 		if object is not player:
+	# 			
