@@ -4,7 +4,7 @@ except:
 	import libtcodpy as tcod
 
 import time
-from pygame import mixer
+# from pygame import mixer
 
 font = 'terminal16x16_gs_ro.png'
 audio = 'dungeon.mp3'
@@ -96,11 +96,14 @@ class Object:
 		if not isBlocked(x=(self.x + dx), y=(self.y + dy)) and (0 <= self.x + dx < MAP_WIDTH) and (0 <= self.y + dy < MAP_HEIGHT):
 			self.x += dx
 			self.y += dy
-		else:
-			dig(x=(self.x + dx), y=(self.y + dy))
-			global map_explorable
-			map_explorable = getExplorableTiles()
-			makeFovMap()
+			return True
+		return False
+
+	def dig(self, dx, dy):
+		dig(x=(self.x + dx), y=(self.y + dy))
+
+	def attack(self, x, y):
+		
 
 	def draw(self, visibility=False, color=None):
 			# set the color and then draw the character that represents this
@@ -113,9 +116,9 @@ class Object:
 		elif tcod.map_is_in_fov(fov_map, self.x, self.y):
 			tcod.console_set_default_foreground(con, color)
 			tcod.console_put_char(con, self.x, self.y, self.char, tcod.BKGND_NONE)
-		else:
-			tcod.console_set_default_foreground(con, tcod.Color(20, 20, 20))
-			tcod.console_put_char(con, self.x, self.y, self.char, tcod.BKGND_NONE)
+		# else:
+		# 	tcod.console_set_default_foreground(con, tcod.Color(20, 20, 20))
+		# 	tcod.console_put_char(con, self.x, self.y, self.char, tcod.BKGND_NONE)
 
 	def clear(self):
 		# erase the character that represents this object
@@ -236,7 +239,7 @@ def makeMap():
 				object.clear()
 	tcod.console_wait_for_keypress(True)
 
-	mixer.music.play()
+	# mixer.music.play()
 
 	map_explorable = getExplorableTiles()
 
@@ -313,7 +316,7 @@ def renderAll(visibility=False):
 
 
 def handleKeys():
-	global fov_recompute, objects, visibility_override, player, move
+	global fov_recompute, objects, visibility_override, player, move, map_explorable
 	key = tcod.console_check_for_keypress(tcod.KEY_RELEASED)  #real-time
 	# key = tcod.console_wait_for_keypress(True)  # turn-based
 
@@ -323,7 +326,7 @@ def handleKeys():
 	elif key.vk == tcod.KEY_ESCAPE:
 		return 'exit'  # exit game
 	elif key.vk == tcod.KEY_DELETE:
-		mixer.music.stop()
+		# mixer.music.stop()
 		objects = []
 		objects.append(player)
 		makeMap()
@@ -362,10 +365,13 @@ def handleKeys():
 		if move and keypress and (tick_counter % (player.speed * mov_mult) == 0):
 			move = False
 			player.char = 'o'
-			player.move(dx, dy)
-			fov_recompute = True
+			if player.move(dx, dy) == True:
+				fov_recompute = True
+			else:
+				player.dig(dx, dy)
+				map_explorable = getExplorableTiles()
+				makeFovMap()
 			return 'action'
-
 		return 'no action'
 
 
@@ -438,8 +444,8 @@ tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'Adividiardi: The Wanderers'
 tcod.sys_set_fps(LIMIT_FPS)
 con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
 
-mixer.init()
-mixer.music.load('data/audio/{}'.format(audio))
+# mixer.init()
+# mixer.music.load('data/audio/{}'.format(audio))
 
 # create object representing the player
 player = Object(
@@ -486,6 +492,8 @@ while not tcod.console_is_window_closed():
 	# erase all objects at their old locations, before they move
 	for object in objects:
 		object.clear()
+		if object is not player:
+			object.char = object.char.upper()
 
 	# print("map explored: {0} / {1}".format(map_explored, map_explorable))
 	if map_explored == map_explorable:
@@ -497,7 +505,7 @@ while not tcod.console_is_window_closed():
 		break
 
 	# let monsters make their turn
-	# if (game_statue == 'playing') and (player_action != 'no action'):
-	# 	for object in objects:
-	# 		if object is not player:
-	# 			
+	if (game_state == 'playing') and (player_action != 'no action'):
+		for object in objects:
+			if object is not player:
+				object.char = object.char.lower()
