@@ -1,0 +1,11 @@
+class Object:
+	type = [structure ^ entity ^ item]
+	constituents
+	stationary
+	symbol
+	name
+	pos_x
+	pos_y
+	pos_z
+
+class

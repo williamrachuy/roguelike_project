@@ -3,6 +3,9 @@ try:
 except:
 	import libtcodpy as tcod
 
+import math, time
+import object_system
+from object_system import *
 import time, random, copy
 import pygame
 from pygame import mixer
@@ -14,19 +17,19 @@ audio = 'dungeon.mp3'
 SCREEN_WIDTH	= 80
 SCREEN_HEIGHT	= 50
 
-# size of the map
-MAP_WIDTH		= 80
-MAP_HEIGHT		= 45
-
 CON_WIDTH		= 80
 CON_HEIGHT		= 5
+
+# size of the map
+MAP_WIDTH		= SCREEN_WIDTH
+MAP_HEIGHT		= SCREEN_HEIGHT - CON_HEIGHT
 
 # parameters for dungeon generator
 ROOM_MAX_SIZE	= 10
 ROOM_MIN_SIZE	=  6
 MAX_ROOMS		= 20
 
-FOV_ALGO		=  0
+FOV_ALGO		= 0
 FOV_LIGHT_WALLS	= True
 TORCH_RADIUS	= 20
 
@@ -39,13 +42,226 @@ PRI_LOW			= 20
 PRI_MED			= 10
 PRI_HIGH		=  0
 
-color_dark_wall		= tcod.Color(20, 20, 20) #(0, 0, 100)
-color_light_wall	= tcod.Color(80, 80, 80) #(130, 110, 50)
-color_dark_ground	= tcod.Color(20, 20, 20) #(50, 50, 150)
-color_light_ground	= tcod.Color(100, 100, 100) #(200, 180, 50)
+base_unexplored		= 10
+color_unexplored	= tcod.Color(base_unexplored, base_unexplored, base_unexplored)
 
-color_dark_wall_ex		= tcod.Color(20, 20, 20) #(0, 0, 100)
-color_dark_ground_ex	= tcod.Color(40, 40, 40) #(50, 50, 150)
+base_wall = 100
+dark_wall = base_wall // 6
+color_light_wall	= tcod.Color(base_wall, base_wall, base_wall) #(130, 110, 50)
+color_dark_wall		= tcod.Color(dark_wall, dark_wall, dark_wall) #(0, 0, 100)
+
+base_ground = 160
+dark_ground = base_ground // 6
+color_light_ground	= tcod.Color(base_ground, base_ground, base_ground) #(200, 180, 50)
+color_dark_ground	= tcod.Color(dark_ground, dark_ground, dark_ground) #(50, 50, 150)
+
+tcod_color_conversion = {
+	'white'		: tcod.white,
+	'grey'		: tcod.grey,
+	'dark grey'	: tcod.dark_grey,
+	'red'		: tcod.red,
+	'green'		: tcod.green,
+	'blue'		: tcod.blue,
+	'yellow'	: tcod.yellow,
+	'black'		: tcod.black,
+}
+
+class World:
+	pass
+
+class Console:
+	def __init__(self):
+		tcod.console_set_custom_font('data/fonts/{}'.format(font), tcod.FONT_TYPE_GREYSCALE | tcod.FONT_LAYOUT_ASCII_INROW)
+		tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'Adividiardi: The Wanderers', False)
+		tcod.sys_set_fps(LIMIT_FPS)
+		self.con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
+		tcod.mouse_show_cursor(False)
+
+	def draw(self, object=None, visibility=False, color=None):
+			# set the color and then draw the character that represents this
+			# object at its position
+		if color is None:
+			color = tcod_color_conversion[object.display_color]
+		if visibility:
+			tcod.console_set_default_foreground(self.con, color)
+			tcod.console_put_char(self.con, object.spacial.position.x, object.spacial.position.y, object.display_symbol, tcod.BKGND_NONE)			
+		elif tcod.map_is_in_fov(fov_map, object.spacial.position.x, object.spacial.position.y):
+			tcod.console_set_default_foreground(self.con, color)
+			tcod.console_put_char(self.con, object.spacial.position.x, object.spacial.position.y, object.display_symbol, tcod.BKGND_NONE)			
+		# else:
+		# 	tcod.console_set_default_foreground(con, tcod.Color(20, 20, 20))
+		# 	tcod.console_put_char(con, self.x, self.y, self.char, tcod.BKGND_NONE)
+
+	def clear(self, object):
+		# erase the character that represents this object
+		tcod.console_put_char(self.con, object.spacial.position.x, object.spacial.position.y, ' ', tcod.BKGND_NONE)
+
+	def renderMessage(self, message="no message", x=0, y=0, color=tcod.white, transparent=True):
+		if not transparent:
+			self.renderErase()
+		tcod.console_set_default_foreground(self.con, color)
+		for i in range(SCREEN_WIDTH):
+			tcod.console_put_char(self.con, i, y, ' ', tcod.BKGND_NONE)
+		for i in range(len(message)):
+			tcod.console_put_char(self.con, x + i, y, message[i], tcod.BKGND_NONE)
+		tcod.console_blit(self.con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
+
+	def renderErase(self, h=SCREEN_HEIGHT, w=SCREEN_WIDTH, x=0, y=0):
+		for _y in range(y, y + h):
+			for _x in range(x, x + w):
+				tcod.console_set_char_background(self.con, _x, _y, tcod.black, tcod.BKGND_SET)
+				tcod.console_put_char(self.con, _x, _y, ' ', tcod.BKGND_NONE)
+		tcod.console_blit(self.con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
+
+	def renderAll(self, visibility=False):
+		global color_dark_wall, color_light_wall
+		global color_dark_ground, color_light_ground
+		global fov_recompute, map, map_explored
+
+		if not visibility:
+			if fov_recompute:
+				fov_recompute = False
+				tcod.map_compute_fov(fov_map, player.spacial.position.x, player.spacial.position.y, fov_range + fov_flicker, FOV_LIGHT_WALLS, FOV_ALGO)
+
+		# go through all tiles, and set their background color
+		for y in range(MAP_HEIGHT):
+			for x in range(MAP_WIDTH):
+
+				if not visibility:
+					visible = tcod.map_is_in_fov(fov_map, x, y)
+				wall = (map[x][y].physical.opacity > 50)
+
+				if visibility:
+					if wall:
+						tcod.console_set_char_background(self.con, x, y, color_light_wall, tcod.BKGND_SET)
+					else:
+						tcod.console_set_char_background(self.con, x, y, color_light_ground, tcod.BKGND_SET)
+				elif not visible:
+					if map[x][y].explored:
+						if wall:
+							tcod.console_set_char_background(self.con, x, y, color_dark_wall, tcod.BKGND_SET)
+						else:
+							tcod.console_set_char_background(self.con, x, y, color_dark_ground, tcod.BKGND_SET)
+					else:
+						if wall:
+							tcod.console_set_char_background(self.con, x, y, color_unexplored, tcod.BKGND_SET)
+						else:
+							tcod.console_set_char_background(self.con, x, y, color_unexplored, tcod.BKGND_SET)
+				else:
+					if not map[x][y].explored and not wall:
+						map_explored += 1
+					map[x][y].explored = True
+					radius = math.sqrt((x - player.spacial.position.x)**2 + (y - player.spacial.position.y)**2)
+					variance = 0
+					if random.randint(0, 100) < 100:
+						variance = random.randint(0, 2)
+					if wall:
+						base = base_wall
+						dark = dark_wall
+						# color = tcod.Color(round(dr * (1.0 + (variance * 0.1))), round(dg * (1.0 + (variance * 0.08))), round(db * (1.0 + (variance * 0..04))))
+						# tcod.console_set_char_background(self.con, x, y, color, tcod.BKGND_SET)
+					else:
+						base = base_ground
+						dark = dark_ground
+					dr = dg = db = dark + ((base - dark) * (1.0 - (radius / (fov_range + fov_flicker))**0.4))
+					color = tcod.Color(round(dr + variance), round(dg + variance), round(db + variance))
+					tcod.console_set_char_background(self.con, x, y, color, tcod.BKGND_SET)
+
+					# if wall:
+					# 	tcod.console_set_char_background(self.con, x, y, color_light_wall, tcod.BKGND_SET)
+					# else:
+					# 	if not map[x][y].explored:
+					# 		map_explored += 1
+					# 	map[x][y].explored = True
+					# 	tcod.console_set_char_background(self.con, x, y, color_light_ground, tcod.BKGND_SET)
+
+		# if tick_counter % 10 == 0:
+		# 	print("{} ticks per second".format(10/getTickPeriod()))
+
+		x_offset = 7
+		bar_length = (SCREEN_WIDTH // 4) - x_offset
+		xb = x_offset + bar_length
+
+		for x in range(x_offset, xb):
+			color = tcod.grey
+			if x < int((player.type.properties.health / player.type.properties._health) * bar_length) + x_offset:
+				color = tcod.red
+				if player.type.properties.health == player.type.properties._health:
+					color = tcod.light_red
+				elif (player.type.properties.health < (0.10 * player.type.properties._health)) and (tick_counter % BLINK_RATE < BLINK_RATE // 2):
+					color = tcod.dark_red
+			tcod.console_set_char_background(self.con, x, SCREEN_HEIGHT - 5, color, tcod.BKGND_SET)
+
+		for x in range(x_offset, xb):
+			color = tcod.grey
+			if x < int((player.type.properties.stamina / player.type.properties._stamina) * bar_length) + x_offset:
+				color = tcod.yellow
+				if player.type.properties.stamina == player.type.properties._stamina:
+					color = tcod.light_yellow
+				elif (player.type.properties.stamina < (0.10 * player.type.properties._stamina)) and (tick_counter % BLINK_RATE < BLINK_RATE // 2):
+					color = tcod.dark_yellow
+			tcod.console_set_char_background(self.con, x, SCREEN_HEIGHT - 4, color, tcod.BKGND_SET)
+
+		for x in range(x_offset, xb):
+			color = tcod.grey
+			if x < int((player.type.properties.essence / player.type.properties._essence) * bar_length) + x_offset:
+				color = tcod.blue
+				if player.type.properties.essence == player.type.properties._essence:
+					color = tcod.light_blue
+				elif (player.type.properties.essence < (0.10 * player.type.properties._essence)) and (tick_counter % BLINK_RATE < BLINK_RATE // 2):
+					color = tcod.dark_blue
+			tcod.console_set_char_background(self.con, x, SCREEN_HEIGHT - 3, color, tcod.BKGND_SET)
+
+		for x in range(x_offset, xb):
+			color = tcod.grey
+			# if x < int((player.type.stats.experience / (player.type.stats.level_base**(player.type.stats.level + 1))) * bar_length) + x_offset:
+			xp_current	= player.type.stats.experience - player.type.calcExperience()
+			xp_needed	= player.type.calcExperience(level=player.type.stats.level+1) - player.type.calcExperience()
+			if x < int((xp_current / xp_needed) * bar_length) + x_offset:
+				color = tcod.green
+			tcod.console_set_char_background(self.con, x, SCREEN_HEIGHT - 2, color, tcod.BKGND_SET)
+
+		text_color = tcod.white
+		pad = len(str(player.type.properties._health)) - len(str(player.type.properties.health))
+		message = "{}{}/{}".format(' '*pad, player.type.properties.health, player.type.properties._health)
+		msg_offset = x_offset - len(message)
+		self.renderMessage(message=message, color=text_color, x=msg_offset, y=SCREEN_HEIGHT-5)
+		pad = len(str(player.type.properties._stamina)) - len(str(player.type.properties.stamina))
+		message = "{}{}/{}".format(' '*pad, player.type.properties.stamina, player.type.properties._stamina)
+		msg_offset = x_offset - len(message)
+		self.renderMessage(message=message, color=text_color, x=msg_offset, y=SCREEN_HEIGHT-4)
+		pad = len(str(player.type.properties._essence)) - len(str(player.type.properties.essence))
+		message = "{}{}/{}".format(' '*pad, player.type.properties.essence, player.type.properties._essence)
+		msg_offset = x_offset - len(message)
+		self.renderMessage(message=message, color=text_color, x=msg_offset, y=SCREEN_HEIGHT-3)
+		pad = 0
+		message = "LVL {}".format(player.type.stats.level)
+		msg_offset = x_offset - len(message)
+		self.renderMessage(message=message, color=text_color, x=msg_offset, y=SCREEN_HEIGHT-2)
+
+
+		self.renderErase(h=1, w=SCREEN_WIDTH, x=0, y=SCREEN_HEIGHT-1)
+		message = "{} of {} tiles explored".format(map_explored, map_explorable)
+		if map_explored == map_explorable:
+			message = "You explored the entire map!"
+		self.renderMessage(message=message, x=0, y=SCREEN_HEIGHT-1, transparent=True)     
+
+		# draw all objects in the list
+		for object in objects:
+			overlap = False
+			for other in objects:
+				if (object.spacial.position.x == other.spacial.position.x) and (object.spacial.position.y == other.spacial.position.y) and (object is not other):
+					# print("overlap for {0}({1}) and {2}({3})".format(object.name, object.priority, other.name, other.priority))
+					overlap = True
+					if object.priority <= other.priority:
+						self.draw(object=object, visibility=visibility)
+			if not overlap:
+				self.draw(object=object, visibility=visibility)
+			if object.blinking:
+				if tick_counter % BLINK_RATE < BLINK_RATE // 2:
+					self.clear(object=object)
+		# blit the contents of "con" to the root console
+		tcod.console_blit(self.con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
 
 
 class Tile:
@@ -207,8 +423,10 @@ def createRoom(room):
 	# go through the tiles in the rectangle and make them passable
 	for x in range(room.x1 + 1, room.x2):
 		for y in range(room.y1 + 1, room.y2):
-			map[x][y].blocked = False
-			map[x][y].block_sight = False
+			object = map[x][y]
+			object.type.species = Ground()
+			object.calcPhysical()
+			object.updateObject()
 
 
 def createTunnelH(x1, x2, y, w=1):
@@ -216,8 +434,10 @@ def createTunnelH(x1, x2, y, w=1):
 	# horizontal tunnel. min() and max() are used in case x1>x2
 	for x in range(min(x1, x2), max(x1, x2) + 1):
 		for _w in range(w):
-			map[x][y + _w].blocked = False
-			map[x][y + _w].block_sight = False
+			object = map[x][y + _w]
+			object.type.species = Ground()
+			object.calcPhysical()
+			object.updateObject()
 
 
 def createTunnelV(y1, y2, x, w=1):
@@ -225,15 +445,17 @@ def createTunnelV(y1, y2, x, w=1):
 	# vertical tunnel
 	for y in range(min(y1, y2), max(y1, y2) + 1):
 		for _w in range(w):
-			map[x + _w][y].blocked = False
-			map[x + _w][y].block_sight = False
+			object = map[x + _w][y]
+			object.type.species = Ground()
+			object.calcPhysical()
+			object.updateObject()
 
 def getExplorableTiles():
 	global map
 	explorable = 0
 	for x in range(MAP_WIDTH):
 		for y in range(MAP_HEIGHT):
-			if not map[x][y].blocked:
+			if not map[x][y].physical.solid:
 				explorable += 1
 	return explorable
 
@@ -243,7 +465,7 @@ def makeMap():
 	# fill map with "blocked" tiles
 	map_explored = 0
 	map = [
-		[Tile(True) for y in range(MAP_HEIGHT)]
+		[createTile(species='wall', x=x, y=y, z=0) for y in range(MAP_HEIGHT)]
 		for x in range(MAP_WIDTH)
 	]
 
@@ -279,8 +501,8 @@ def makeMap():
 
 			if num_rooms == 0:
 				# this is the first room, where the player starts at
-				player.x = new_x
-				player.y = new_y
+				player.spacial.position.x = new_x
+				player.spacial.position.y = new_y
 			else:
 				# all rooms after the first:
 				# connect it to the previous room with a tunnel
@@ -304,18 +526,19 @@ def makeMap():
 			# finally, append the new room to the list
 			num_rooms += 1
 			rooms.append(new_room)
-			if show_room_no:
-				room_no = Object(name='room{}'.format(chr(65 + num_rooms - 1)), blocks=False,
-							x=new_x, y=new_y, char=chr(65 + num_rooms - 1),
-							color=tcod.grey, priority=99)
-				objects.insert(0,room_no)
+			# if show_room_no:
+			# 	room_no = Object(name='room{}'.format(chr(65 + num_rooms - 1)), blocks=False,
+			# 				x=new_x, y=new_y, char=chr(65 + num_rooms - 1),
+			# 				color=tcod.grey, priority=99)
+			# 	objects.insert(0,room_no)
 
 			# renderAll(visibility=True)
 			tcod.console_flush()
 			for object in objects:
-				object.clear()
+				console.clear(object=object)
 
 	map_explorable = getExplorableTiles()
+	# [[print(map[x][y].physical.solid) for y in range(MAP_HEIGHT)] for x in range(MAP_WIDTH)]
 
 def makeFovMap():
 	global fov_map, fov_recompute
@@ -323,110 +546,12 @@ def makeFovMap():
 	fov_recompute = True
 	for y in range(MAP_HEIGHT):
 		for x in range(MAP_WIDTH):
-			tcod.map_set_properties(fov_map, x, y, not map[x][y].block_sight, not map[x][y].blocked)
-
-def renderAll(visibility=False):
-	global color_dark_wall, color_light_wall
-	global color_dark_ground, color_light_ground
-	global fov_recompute, map, map_explored
-
-	if not visibility:
-		if fov_recompute:
-			fov_recompute = False
-			tcod.map_compute_fov(fov_map, player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO)
-
-	# go through all tiles, and set their background color
-	for y in range(MAP_HEIGHT):
-		for x in range(MAP_WIDTH):
-
-			if not visibility:
-				visible = tcod.map_is_in_fov(fov_map, x, y)
-			wall = map[x][y].block_sight
-
-			if visibility:
-				if wall:
-					tcod.console_set_char_background(con, x, y, color_light_wall, tcod.BKGND_SET)
-				else:
-					tcod.console_set_char_background(con, x, y, color_light_ground, tcod.BKGND_SET)
-			elif not visible:
-				if map[x][y].explored:
-					if wall:
-						tcod.console_set_char_background(con, x, y, color_dark_wall_ex, tcod.BKGND_SET)
-					else:
-						tcod.console_set_char_background(con, x, y, color_dark_ground_ex, tcod.BKGND_SET)
-				else:
-					if wall:
-						tcod.console_set_char_background(con, x, y, color_dark_wall, tcod.BKGND_SET)
-					else:
-						tcod.console_set_char_background(con, x, y, color_dark_ground, tcod.BKGND_SET)
-			else:
-				if wall:
-					tcod.console_set_char_background(con, x, y, color_light_wall, tcod.BKGND_SET)
-				else:
-					if not map[x][y].explored:
-						map_explored += 1
-					map[x][y].explored = True
-					tcod.console_set_char_background(con, x, y, color_light_ground, tcod.BKGND_SET)
-
-	for x in range(player._health // 5):
-		color = tcod.grey
-		if x < player.health // 5:
-			color = tcod.red
-		tcod.console_set_char_background(con, x, MAP_HEIGHT, color, tcod.BKGND_SET)
-
-	for x in range(player._essence // 5):
-		color = tcod.grey
-		if x < player.essence // 5:
-			color = tcod.blue
-		tcod.console_set_char_background(con, x, MAP_HEIGHT + 1, color, tcod.BKGND_SET)
-
-	for x in range(player._stamina // 5):
-		color = tcod.grey
-		if x < player.stamina // 5:
-			color = tcod.green
-		tcod.console_set_char_background(con, x, MAP_HEIGHT + 2, color, tcod.BKGND_SET)
-
-	renderErase(h=1, w=SCREEN_WIDTH, x=0, y=SCREEN_HEIGHT-1)
-	message = "{} of {} tiles explored".format(map_explored, map_explorable)
-	if map_explored == map_explorable:
-		message = "You explored the entire map!"
-	renderMessage(message=message, x=0, y=SCREEN_HEIGHT-2, transparent=True)     
-
-	# draw all objects in the list
-	for object in objects:
-		overlap = False
-		for other in objects:
-			if (object.x == other.x) and (object.y == other.y) and (object is not other):
-				# print("overlap for {0}({1}) and {2}({3})".format(object.name, object.priority, other.name, other.priority))
-				overlap = True
-				if object.priority <= other.priority:
-					object.draw(visibility=visibility)
-		if not overlap:
-			object.draw(visibility=visibility)
-		if object.blinking:
-			if tick_counter % BLINK_RATE < BLINK_RATE // 2:
-				object.clear()
-	# blit the contents of "con" to the root console
-	tcod.console_blit(con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
-
-def renderMessage(message="no message", x=0, y=0, color=tcod.white, transparent=True):
-	if not transparent:
-		renderErase()
-	for i in range(len(message)):
-		tcod.console_set_default_foreground(con, color)
-		tcod.console_put_char(con, x + i, y, message[i], tcod.BKGND_NONE)
-	tcod.console_blit(con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
-
-def renderErase(h=SCREEN_HEIGHT, w=SCREEN_WIDTH, x=0, y=0):
-	for _y in range(y, y + h):
-		for _x in range(x, x + w):
-			tcod.console_set_char_background(con, _x, _y, tcod.black, tcod.BKGND_SET)
-			tcod.console_put_char(con, _x, _y, ' ', tcod.BKGND_NONE)
-	tcod.console_blit(con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
+			physical = map[x][y].physical
+			tcod.map_set_properties(fov_map, x, y, not (physical.opacity > 20), not physical.solid)
 
 def handleKeys():
-	global fov_recompute, objects, visibility_override, player, move
-	object.updateStatus()
+	global fov_recompute, objects, visibility_override, player, move, fov_range
+	player.updateObject()
 	key = tcod.console_check_for_keypress(tcod.KEY_RELEASED)  #real-time
 	# key = tcod.console_wait_for_keypress(True)  # turn-based
 
@@ -438,17 +563,18 @@ def handleKeys():
 	elif key.vk == tcod.KEY_DELETE:
 		mixer.music.stop()
 		objects = []
+		player = copy.deepcopy(player_base)
 		objects.append(player)
 		makeMap()
 		fov_recompute = True
 		makeFovMap()
-		time.sleep(1)
-		message = "You wake up..."
-		renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
-		tcod.console_flush()
-		time.sleep(2)
-		renderErase()
-		tcod.console_flush()
+		# time.sleep(1)
+		# message = "You wake up..."
+		# console.renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
+		# tcod.console_flush()
+		# time.sleep(2)
+		# console.renderErase()
+		# tcod.console_flush()
 		mixer.music.play(-1)
 	elif key.vk == tcod.KEY_1:
 		visibility_override = not visibility_override
@@ -457,16 +583,27 @@ def handleKeys():
 	elif key.c == ord('p'):
 		return 'pause'
 	elif key.c == ord('h'):
-		player.harm(type=['health', 'essence', 'stamina'], amount=10)
-		player.updateStatus()
+		player.type.harm(type=['health', 'essence', 'stamina'], amount=1)
+		player.type.modifyExperience(amount=-10, delta=True)
+		player.updateObject()
+	elif key.c == ord('n'):
+		if fov_range > 1:
+			fov_range -= 1
+			fov_recompute = True
+	elif key.c == ord('m'):
+		fov_range += 1
+		fov_recompute = True
 
 	mov_mult = 2
 	if tcod.console_is_key_pressed(tcod.KEY_SHIFT):
 		mov_mult = 1
 
-	if tick_counter % (player.speed * mov_mult) == 0:
+	if tick_counter % (player.type.properties.movement * mov_mult) == 0:
 		move = True
-		player.char = player._char
+		player.display_symbol = player.getDisplaySymbol()
+	elif not move:
+		player.display_symbol = player.getDisplaySymbol().lower()
+
 
 	if game_state == 'playing':
 		# movement keys
@@ -485,25 +622,30 @@ def handleKeys():
 			(dx, dy) = (dx + 1, dy + 0)
 			keypress = True
 		if tcod.console_is_key_pressed(tcod.KEY_SPACE):
-			if tick_player % REGEN_RATE == 0:
-				player.heal(type=['health', 'essence', 'stamina'], amount=5)
-				player.updateStatus()
+			if tick_player % int(round(player.type.properties.regen)) == 0: # originally tick_player
+				player.type.heal(type=['health', 'essence', 'stamina'], amount=1)
+				player.type.modifyExperience(amount=10, delta=True)
+				# player.updateObject()
 			return 'action'
 
-		if move and keypress and (tick_counter % (player.speed * mov_mult) == 0):
+		if move and keypress and (tick_counter % (player.type.properties.movement * mov_mult) == 0):
 			# print("{0} at {1} {2}".format(player.name, player.x, player.y))
 			# print("Tick #{}".format(tick_counter))
 			move = False
 			# player.char = 'o'
-			if player.move(dx, dy) == True:
+			if player.move(dx=dx, dy=dy, dz=0, map=map, objects=objects) == True:
 				# print("\tmoves to {0} {1}".format(player.x, player.y))
 				fov_recompute = True
 				if mov_mult == 2:
-					player.heal(type=['stamina'], amount=1)
+					player.type.heal(type=['stamina'], amount=1)
 				else:
-					player.harm(type=['stamina'], amount=1)
-				if player.stamina == player._stamina:
-					player.heal(type=['health'], amount=1)
+					if player.type.properties.stamina != 0:
+						player.type.harm(type=['stamina'], amount=1)
+					else:
+						player.type.harm(type=['health'], amount=1)
+				if player.type.properties.stamina == player.type.properties._stamina:
+					player.type.heal(type=['health'], amount=1)
+			'''
 			elif player.dig(dx, dy) == True:
 				# print("\tdigs")
 				pass
@@ -515,8 +657,11 @@ def handleKeys():
 			else:
 				pass
 				# print("\tnothing to do")
+			'''
 			return 'action'
-		elif keypress and (tick_player % (player._speed * mov_mult) == 0):
+		elif keypress and (tick_counter % (player.type.properties._movement * mov_mult) == 0): # originally tick_player and properties.movement
+			if mov_mult == 2:
+				player.type.heal(type=['stamina'], amount=1)
 			return 'fatigued'
 		return 'no action'
 
@@ -580,13 +725,13 @@ def placeObjects(room):
 						essence=50)
 			objects.append(monster)
 
-def isBlocked(x, y):
-	if map[x][y].blocked:
-		return True
-	for object in objects:
-		if object.blocks and object.x == x and object.y == y:
-			return True
-	return False
+# def isBlocked(x=0, y=0, z=0):
+# 	if map[x][y].physical.solid:
+# 		return True
+# 	for object in objects:
+# 		if object.physical.solid and object.spacial.position.x == x and object.spacial.position.y == y:
+# 			return True
+# 	return False
 
 def dig(object, x, y):
 	global map, map_explorable
@@ -626,7 +771,7 @@ def takeTurn(object, tick):
 	# print("{0} at {1} {2}".format(object.name, object.x, object.y))
 	object.updateStatus()
 	if tick % object.speed == 0:
-		object.char = object._char
+		object.display_symbol = object.object_display_symbol.upper()
 	else:
 		# print("\tmust wait")
 		return 'no action'
@@ -696,6 +841,26 @@ def updateTickPlayer():
 	global tick_player
 	tick_player += 1
 
+def updateFovFlicker():
+	global fov_flicker, fov_recompute
+	if not (random.randint(0, 100) < 25):
+		return
+	min = -fov_flicker
+	max = round(fov_flicker**0.5)
+	fov_flicker += random.randint(min, max)
+	if fov_flicker < 1:
+		fov_flicker = 1
+	fov_recompute = True
+	# print('|'*(fov_range + fov_flicker))
+
+def getTickPeriod():
+	global time_tick_pre
+	time_tick_now = time.time()
+	retval = time_tick_now - time_tick_pre
+	time_tick_pre = time_tick_now
+	return retval
+
+
 # def createProjectile(source=None, dx=0, dy=0):
 # 	projectile = Object(
 # 			name='projectile', blocks=False,
@@ -708,11 +873,7 @@ def updateTickPlayer():
 #############################################
 
 # tcod.console_set_custom_font('arial10x10.png', tcod.FONT_TYPE_GREYSCALE | tcod.FONT_LAYOUT_TCOD)
-tcod.console_set_custom_font('data/fonts/{}'.format(font), tcod.FONT_TYPE_GREYSCALE | tcod.FONT_LAYOUT_ASCII_INROW)
-tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'Adividiardi: The Wanderers', False)
-tcod.sys_set_fps(LIMIT_FPS)
-con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
-tcod.mouse_show_cursor(False)
+console = Console()
 # tcod.console_set_fullscreen(True)
 
 # mixer.init()
@@ -722,15 +883,7 @@ music = mixer.music.load('data/audio/{}'.format(audio))
 # hurt_troll = mixer.Sound('data/audio/{}'.format('cough.wav'))
 
 # create object representing the player
-player_base = Object(
-		name='player', blocks=True,
-		x=(SCREEN_WIDTH // 2),
-		y=(SCREEN_HEIGHT // 2),
-		char='O', color=tcod.white,
-		priority=0, blinking=False,
-		speed=4, alive=True,
-		health=100, damage=10, fov=10,
-		stationary=False, essence=100)
+player_base = createPlayer(species='human', display_symbol='O', level=0)
 player = copy.deepcopy(player_base)
 
 # create an NPC
@@ -747,40 +900,47 @@ map_explorable = 0
 map_explored = 0
 fov_map = None
 fov_recompute = True
+fov_range = player.type.properties.sight
+fov_flicker = 0
 visibility_override = False
-spawn_monsters = True
+spawn_monsters = False
 toggle_blinking = False
 show_room_no = False
 tick_counter = 0
 tick_player = 0
 move = False
 
+time_tick_pre = time.time()
+
 makeMap()
 makeFovMap()
 
 message = "You wake up..."
-renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
+console.renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
 tcod.console_flush()
 time.sleep(2)
-renderErase()
+console.renderErase()
 tcod.console_flush()
 mixer.music.play(-1)
 time.sleep(1)
 
 while not tcod.console_is_window_closed():
-		
+	map_explored_old = map_explored
 	# render the screen
-	renderAll(visibility=visibility_override)
+	console.renderAll(visibility=visibility_override)
 	tcod.console_flush()
 
-	if player.health <= 0:
+	if map_explored > map_explored_old:
+		player.type.modifyExperience(amount=10, delta=True)
+
+	if player.type.properties.health <= 0:
 		message = "Y O U   D I E D . . ."
-		renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
+		console.renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
 		tcod.console_flush()
 		mixer.music.stop()
 		time.sleep(2)
 		tcod.console_wait_for_keypress(False)
-		renderErase()
+		console.renderErase()
 		tcod.console_flush()
 		objects = []
 		player = copy.deepcopy(player_base)
@@ -793,20 +953,21 @@ while not tcod.console_is_window_closed():
 		makeFovMap()
 
 		message = "You wake up..."
-		renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
+		console.renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
 		tcod.console_flush()
 		time.sleep(2)
-		renderErase()
+		console.renderErase()
 		tcod.console_flush()
 		mixer.music.play(-1)
 		time.sleep(1)
 
 
 	updateTickCounter()
+	updateFovFlicker()
 
 	# erase all objects at their old locations, before they move
 	for object in objects:
-		object.clear()
+		console.clear(object=object)
 		# if object is not player:
 		# 	object.char = object.char.upper()
 
@@ -823,6 +984,7 @@ while not tcod.console_is_window_closed():
 	# let monsters make their turn
 	if (game_state is 'playing') and (player_action in ['action', 'fatigued']):
 		for object in objects:
-			if (object is not player) and object.alive:
-				object.char = object._char
-				takeTurn(object=object, tick=tick_player)
+			if object.type.name is 'entity':
+				if (object.type.type.name is not 'player') and object.type.alive:
+					object.display_symbol = object.display_symbol.upper()
+					takeTurn(object=object, tick=tick_player)
