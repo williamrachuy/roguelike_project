@@ -1,16 +1,16 @@
-try:
-	import tcod
-except:
-	import libtcodpy as tcod
+# try:
+# 	import tcod
+# except:
+import libtcodpy as tcod
 
 import math, time
 import object_system
 from object_system import *
 import time, random, copy
-import pygame
-from pygame import mixer
+# import pygame
+# from pygame import mixer
 
-font = 'terminal16x16_gs_ro.png'
+font = 'terminal8x8_gs_ro.png'
 audio = 'dungeon.mp3'
 
 # actual size of the window
@@ -33,7 +33,7 @@ FOV_ALGO		= 0
 FOV_LIGHT_WALLS	= True
 TORCH_RADIUS	= 20
 
-LIMIT_FPS		= 60  # 20 frames-per-second maximum
+LIMIT_FPS		= 20  # 20 frames-per-second maximum
 TICK_RATE		= 10
 BLINK_RATE		= 30
 REGEN_RATE		= 5
@@ -118,6 +118,11 @@ class Console:
 		global color_dark_ground, color_light_ground
 		global fov_recompute, map, map_explored
 
+		n = 4
+		if tick_counter % n == 0:
+			message = "{} ticks/second".format(round(n/getTickPeriod()))
+			self.renderMessage(message=message)
+
 		if not visibility:
 			if fov_recompute:
 				fov_recompute = False
@@ -175,8 +180,6 @@ class Console:
 					# 	map[x][y].explored = True
 					# 	tcod.console_set_char_background(self.con, x, y, color_light_ground, tcod.BKGND_SET)
 
-		# if tick_counter % 10 == 0:
-		# 	print("{} ticks per second".format(10/getTickPeriod()))
 
 		x_offset = 7
 		bar_length = (SCREEN_WIDTH // 4) - x_offset
@@ -561,9 +564,12 @@ def handleKeys():
 	elif key.vk == tcod.KEY_ESCAPE:
 		return 'exit'  # exit game
 	elif key.vk == tcod.KEY_DELETE:
-		mixer.music.stop()
+		# mixer.music.stop()
 		objects = []
+		xp = player.type.stats.experience
 		player = copy.deepcopy(player_base)
+		player.type.stats.experience = xp
+		player.type.calcEntityStats()
 		objects.append(player)
 		makeMap()
 		fov_recompute = True
@@ -575,7 +581,7 @@ def handleKeys():
 		# time.sleep(2)
 		# console.renderErase()
 		# tcod.console_flush()
-		mixer.music.play(-1)
+		# mixer.music.play(-1)
 	elif key.vk == tcod.KEY_1:
 		visibility_override = not visibility_override
 	elif key.vk == tcod.KEY_2:
@@ -759,9 +765,9 @@ def attack(attacker, x, y):
 				attacker.harm(type=['stamina'], amount=5)
 			object.harm(type=['health'], amount=attacker.damage)
 			# if object.name in ['spider']:
-			# 	mixer.Channel(1).play(hurt_spider)
+				# mixer.Channel(1).play(hurt_spider)
 			# elif object.name in ['troll']:
-			# 	mixer.Channel(1).play(hurt_troll)
+				# mixer.Channel(1).play(hurt_troll)
 			object.updateStatus()
 			return True
 	return False
@@ -877,13 +883,14 @@ console = Console()
 # tcod.console_set_fullscreen(True)
 
 # mixer.init()
-mixer.init()
-music = mixer.music.load('data/audio/{}'.format(audio))
+# mixer.init()
+# music = mixer.music.load('data/audio/{}'.format(audio))
 # hurt_spider = mixer.Sound('data/audio/{}'.format('ouch.wav'))
 # hurt_troll = mixer.Sound('data/audio/{}'.format('cough.wav'))
 
 # create object representing the player
 player_base = createPlayer(species='human', display_symbol='O', level=0)
+player_base.type.stats.speed = 4
 player = copy.deepcopy(player_base)
 
 # create an NPC
@@ -921,7 +928,7 @@ tcod.console_flush()
 time.sleep(2)
 console.renderErase()
 tcod.console_flush()
-mixer.music.play(-1)
+# mixer.music.play(-1)
 time.sleep(1)
 
 while not tcod.console_is_window_closed():
@@ -937,7 +944,7 @@ while not tcod.console_is_window_closed():
 		message = "Y O U   D I E D . . ."
 		console.renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
 		tcod.console_flush()
-		mixer.music.stop()
+		# mixer.music.stop()
 		time.sleep(2)
 		tcod.console_wait_for_keypress(False)
 		console.renderErase()
@@ -958,7 +965,7 @@ while not tcod.console_is_window_closed():
 		time.sleep(2)
 		console.renderErase()
 		tcod.console_flush()
-		mixer.music.play(-1)
+		# mixer.music.play(-1)
 		time.sleep(1)
 
 
