@@ -10,7 +10,7 @@ import time, random, copy
 # import pygame
 # from pygame import mixer
 
-font = 'terminal8x8_gs_ro.png'
+font = 'terminal16x16_gs_ro.png'
 audio = 'dungeon.mp3'
 
 # actual size of the window
@@ -33,7 +33,7 @@ FOV_ALGO		= 0
 FOV_LIGHT_WALLS	= True
 TORCH_RADIUS	= 20
 
-LIMIT_FPS		= 20  # 20 frames-per-second maximum
+LIMIT_FPS		= 60  # 20 frames-per-second maximum
 TICK_RATE		= 10
 BLINK_RATE		= 30
 REGEN_RATE		= 5
@@ -64,6 +64,7 @@ tcod_color_conversion = {
 	'blue'		: tcod.blue,
 	'yellow'	: tcod.yellow,
 	'black'		: tcod.black,
+	'orange'	: tcod.orange,
 }
 
 class World:
@@ -118,9 +119,9 @@ class Console:
 		global color_dark_ground, color_light_ground
 		global fov_recompute, map, map_explored
 
-		n = 4
-		if tick_counter % n == 0:
-			message = "{} ticks/second".format(round(n/getTickPeriod()))
+		n = 1
+		if (tick_counter % n == 0) and show_fps:
+			message = "{:.2f} ticks/second".format(n/getTickPeriod())
 			self.renderMessage(message=message)
 
 		if not visibility:
@@ -171,6 +172,11 @@ class Console:
 					dr = dg = db = dark + ((base - dark) * (1.0 - (radius / (fov_range + fov_flicker))**0.4))
 					color = tcod.Color(round(dr + variance), round(dg + variance), round(db + variance))
 					tcod.console_set_char_background(self.con, x, y, color, tcod.BKGND_SET)
+
+					if (x, y) == ((player.spacial.position.x + player.spacial.direction.x), (player.spacial.position.y + player.spacial.direction.y)):
+						color = color + tcod.dark_grey
+						tcod.console_set_char_background(self.con, x, y, color, tcod.BKGND_SET)
+
 
 					# if wall:
 					# 	tcod.console_set_char_background(self.con, x, y, color_light_wall, tcod.BKGND_SET)
@@ -252,14 +258,16 @@ class Console:
 		# draw all objects in the list
 		for object in objects:
 			overlap = False
-			for other in objects:
+			radius = math.sqrt((object.spacial.position.x - player.spacial.position.x)**2 + (object.spacial.position.y - player.spacial.position.y)**2)
+			color = tcod_color_conversion[object.display_color] / (1 + radius)
+			for other in objects:				
 				if (object.spacial.position.x == other.spacial.position.x) and (object.spacial.position.y == other.spacial.position.y) and (object is not other):
 					# print("overlap for {0}({1}) and {2}({3})".format(object.name, object.priority, other.name, other.priority))
 					overlap = True
 					if object.priority <= other.priority:
-						self.draw(object=object, visibility=visibility)
+						self.draw(object=object, visibility=visibility, color=color)
 			if not overlap:
-				self.draw(object=object, visibility=visibility)
+				self.draw(object=object, visibility=visibility, color=color)
 			if object.blinking:
 				if tick_counter % BLINK_RATE < BLINK_RATE // 2:
 					self.clear(object=object)
@@ -524,8 +532,8 @@ def makeMap():
 						createTunnelH(x1=prev_x, x2=new_x, y=new_y, w=tcod.random_get_int(0, 1, 4))
 						createTunnelV(y1=prev_y, y2=new_y, x=prev_x, w=tcod.random_get_int(0, 1, 4))
 
-			if spawn_monsters:
-				placeObjects(new_room)
+			# if spawn_monsters:
+			# 	placeObjects(new_room)
 			# finally, append the new room to the list
 			num_rooms += 1
 			rooms.append(new_room)
@@ -553,7 +561,7 @@ def makeFovMap():
 			tcod.map_set_properties(fov_map, x, y, not (physical.opacity > 20), not physical.solid)
 
 def handleKeys():
-	global fov_recompute, objects, visibility_override, player, move, fov_range
+	global fov_recompute, objects, visibility_override, player, move, fov_range, show_fps
 	player.updateObject()
 	key = tcod.console_check_for_keypress(tcod.KEY_RELEASED)  #real-time
 	# key = tcod.console_wait_for_keypress(True)  # turn-based
@@ -586,6 +594,9 @@ def handleKeys():
 		visibility_override = not visibility_override
 	elif key.vk == tcod.KEY_2:
 		player.blinking = not player.blinking
+	elif key.vk == tcod.KEY_3:
+		show_fps = not show_fps
+		console.renderMessage(message=' '*SCREEN_WIDTH)
 	elif key.c == ord('p'):
 		return 'pause'
 	elif key.c == ord('h'):
@@ -603,6 +614,10 @@ def handleKeys():
 	mov_mult = 2
 	if tcod.console_is_key_pressed(tcod.KEY_SHIFT):
 		mov_mult = 1
+
+	look = False
+	if tcod.console_is_key_pressed(tcod.KEY_CONTROL):
+		look = True
 
 	if tick_counter % (player.type.properties.movement * mov_mult) == 0:
 		move = True
@@ -639,6 +654,9 @@ def handleKeys():
 			# print("Tick #{}".format(tick_counter))
 			move = False
 			# player.char = 'o'
+			player.face(dx=dx, dy=dy, dz=0)
+			if look:
+				return 'action'
 			if player.move(dx=dx, dy=dy, dz=0, map=map, objects=objects) == True:
 				# print("\tmoves to {0} {1}".format(player.x, player.y))
 				fov_recompute = True
@@ -666,6 +684,7 @@ def handleKeys():
 			'''
 			return 'action'
 		elif keypress and (tick_counter % (player.type.properties._movement * mov_mult) == 0): # originally tick_player and properties.movement
+			player.face(dx=dx, dy=dy, dz=0)
 			if mov_mult == 2:
 				player.type.heal(type=['stamina'], amount=1)
 			return 'fatigued'
@@ -773,6 +792,7 @@ def attack(attacker, x, y):
 	return False
 
 def takeTurn(object, tick):
+	return
 	global fov_recompute
 	# print("{0} at {1} {2}".format(object.name, object.x, object.y))
 	object.updateStatus()
@@ -866,6 +886,20 @@ def getTickPeriod():
 	time_tick_pre = time_tick_now
 	return retval
 
+def spawnMonsters():
+	global objects
+	npc_list = ['human', 'elf']
+	npc_species = random.choice(npc_list)
+
+	while True:
+		(x, y) = (random.randint(1, MAP_WIDTH-1), random.randint(1,MAP_HEIGHT-1))
+		if not map[x][y].physical.solid:
+			break
+
+	npc = createNpc(species=npc_species, x=x, y=y, z=0)
+	objects.append(npc)
+	print("a {} was created at {} {}".format(npc.type.species.name, npc.spacial.position.x, npc.spacial.position.y))
+	npc.dump()
 
 # def createProjectile(source=None, dx=0, dy=0):
 # 	projectile = Object(
@@ -910,18 +944,23 @@ fov_recompute = True
 fov_range = player.type.properties.sight
 fov_flicker = 0
 visibility_override = False
-spawn_monsters = False
+spawn_monsters = True
 toggle_blinking = False
 show_room_no = False
 tick_counter = 0
 tick_player = 0
 move = False
+show_fps = False
 
 time_tick_pre = time.time()
 
 makeMap()
 makeFovMap()
 
+if spawn_monsters:
+	spawnMonsters()
+
+'''
 message = "You wake up..."
 console.renderMessage(message=message, x=(SCREEN_WIDTH//2)-(len(message)//2), y=SCREEN_HEIGHT//2, transparent=False)
 tcod.console_flush()
@@ -930,6 +969,7 @@ console.renderErase()
 tcod.console_flush()
 # mixer.music.play(-1)
 time.sleep(1)
+'''
 
 while not tcod.console_is_window_closed():
 	map_explored_old = map_explored

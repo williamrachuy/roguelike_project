@@ -315,7 +315,11 @@ class Object:
 			return True
 		return False
 
-	def setDirection(self, delta=False, x=0, y=0, z=0):
+	def face(self, dx=0, dy=0, dz=0):
+		self.setDirection(x=dx, y=dy, z=dz)
+		return True
+
+	def setDirection(self, x=0, y=0, z=0, delta=False):
 		dir = self.spacial.direction
 		if delta:
 			x = dir.x + x
@@ -427,10 +431,10 @@ class Entity:
 		self.storage	= []
 		self.equipment	= equipment_dict
 		self.setType(type=type)
-		self.setSpecies(species=species, recalc=False)
+		self.setSpecies(species=species, recalc=False)  # False?
 		species_name	= self.species.name
 		species_symbol	= self.species.symbol
-		species_color	= self.species.symbol
+		species_color	= self.species.color
 
 		if stats is None:
 			stats = species
@@ -497,7 +501,7 @@ class Entity:
 		p._capacity	= int(round((s.strength + s.endurance) * (1 + s.level / s.level_base)))
 		p._sight	= int(round(s.perception * (1 + s.level / s.level_base)))
 		p._activity	= int(round(s.agility + s.speed + s.endurance))
-		p._movement	= int(round(s.speed / (1 + s.level / s.level_base)))
+		p._movement	= int(round(s.speed / (1 + s.level / (s.level_base + s.level))))
 		if immediate:
 			p.health	= p._health
 			p.essence	= p._essence
@@ -759,13 +763,13 @@ class Human:
 	def __init__(self):
 		self.name	= 'human'
 		self.symbol	= 'H'
-		self.color	= 'white'
+		self.color	= 'orange'
 		
 class Elf:
 	def __init__(self):
 		self.name	= 'elf'
 		self.symbol	= 'E'
-		self.color	= 'white'
+		self.color	= 'yellow'
 		
 class Dwarf:
 	def __init__(self):
